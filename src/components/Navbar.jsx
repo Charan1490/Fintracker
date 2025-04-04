@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
-import { Bars3Icon, XMarkIcon, ChartBarIcon, CurrencyDollarIcon, HomeIcon, ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline';
+import { Bars3Icon, XMarkIcon, ChartBarIcon, CurrencyDollarIcon, HomeIcon, ArrowRightOnRectangleIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
@@ -22,6 +22,7 @@ export default function Navbar() {
     { name: 'Dashboard', path: '/', icon: HomeIcon },
     { name: 'Transactions', path: '/transactions', icon: CurrencyDollarIcon },
     { name: 'Budget', path: '/budget', icon: ChartBarIcon },
+    { name: 'Settings', path: '/settings', icon: Cog6ToothIcon },
   ];
 
   const isActiveLink = (path) => location.pathname === path;

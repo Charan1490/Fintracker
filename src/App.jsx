@@ -9,6 +9,7 @@ import Auth from './pages/Auth';
 import Dashboard from './pages/Dashboard';
 import Transactions from './pages/Transactions';
 import Budget from './pages/Budget';
+import Settings from './pages/Settings';
 
 const AppLayout = ({ children, user }) => {
   const location = useLocation();
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="/" element={<PrivateRoute user={user}><Dashboard /></PrivateRoute>} />
           <Route path="/transactions" element={<PrivateRoute user={user}><Transactions /></PrivateRoute>} />
           <Route path="/budget" element={<PrivateRoute user={user}><Budget /></PrivateRoute>} />
+          <Route path="/settings" element={<PrivateRoute user={user}><Settings /></PrivateRoute>} />
         </Routes>
       </AppLayout>
     </Router>
