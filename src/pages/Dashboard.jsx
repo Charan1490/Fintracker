@@ -1,13 +1,20 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
-import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, limit, getDocs, where } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import { 
   ArrowUpIcon, ArrowDownIcon, ChartBarIcon, ChartPieIcon, CurrencyDollarIcon, 
   CalendarIcon, EyeIcon, LightBulbIcon, ArrowTrendingUpIcon, ArrowTrendingDownIcon, 
-  BanknotesIcon, ExclamationTriangleIcon, StarIcon
+  BanknotesIcon, ExclamationTriangleIcon, StarIcon, CreditCardIcon, SparklesIcon
 } from '@heroicons/react/24/outline';
 import { getTotals, getCategoryData, getMonthlyTrendData } from '../utils/transactions';
+import BudgetProgress from '../components/BudgetProgress';
+import RecentTransactions from '../components/RecentTransactions';
+import { BarChart, PieChart, LineChart, ResponsiveContainer, XAxis, YAxis, Bar, Pie, Line, CartesianGrid, Tooltip, Legend, Cell } from 'recharts';
+import Spinner from '../components/Spinner';
+import { generateInsights, generateBudgetRecommendations, predictFutureExpenses, setGeminiApiKey } from '../utils/ai';
+import FinancialHealthAnalyzer from '../components/FinancialHealthAnalyzer';
+import GeminiApiExplainer from '../components/GeminiApiExplainer';
 
 // Lazy load chart components for better performance
 const ChartComponents = lazy(() => import('../components/ChartComponents'));
@@ -58,7 +65,7 @@ const SummaryCard = React.memo(({ icon, title, value, subtitle, color }) => (
 ));
 
 // Memoized Recent Transaction Item component
-const TransactionItem = React.memo(({ transaction }) => {
+const TransactionItem = React.memo(({ transaction, index = 0 }) => {
   const { id, title, amount, category, date } = transaction;
   const formatCategoryDisplay = (categoryId) => {
     const cat = categoryMap[categoryId];
@@ -66,25 +73,37 @@ const TransactionItem = React.memo(({ transaction }) => {
   };
 
   return (
-    <div className="flex items-center p-3 rounded-lg hover:bg-gray-50 transition-colors duration-200">
-      <div className={`p-2 rounded-full mr-3 ${amount > 0 ? 'bg-green-100' : 'bg-red-100'}`}>
+    <div 
+      className="flex items-center p-3 rounded-xl hover:bg-blue-50/30 hover:backdrop-blur-sm transition-all duration-300 animate-slideIn border border-transparent hover:border-blue-100/50"
+      style={{ animationDelay: `${index * 75}ms` }}
+    >
+      <div className={`p-2 rounded-full mr-3 ${
+        amount > 0 
+          ? 'bg-gradient-to-br from-green-100 to-green-50 animate-float' 
+          : 'bg-gradient-to-br from-red-100 to-red-50 animate-float'
+      }`}>
         {amount > 0 ? 
           <ArrowUpIcon className="h-5 w-5 text-green-600" /> : 
           <ArrowDownIcon className="h-5 w-5 text-red-600" />
         }
       </div>
       <div className="flex-1">
-        <div className="flex justify-between">
+        <div className="flex justify-between items-center">
           <h4 className="text-sm font-medium text-gray-900">{title}</h4>
-          <span className={`text-sm font-medium ${amount > 0 ? 'text-green-600' : 'text-red-600'}`}>
+          <span className={`text-sm font-medium ${amount > 0 ? 'text-green-600' : 'text-red-600'} animate-blur-in`} style={{ animationDelay: `${(index * 75) + 100}ms` }}>
             {amount > 0 ? '+' : ''}${Math.abs(amount).toFixed(2)}
           </span>
         </div>
-        <div className="flex justify-between mt-1">
-          <span className="text-xs text-gray-500">
-            {formatCategoryDisplay(category)}
+        <div className="flex justify-between mt-1 items-center">
+          <span className="text-xs text-gray-500 flex items-center">
+            <span className="transform transition-all duration-300 inline-block hover:scale-110 mr-1">
+              {formatCategoryDisplay(category).split(' ')[0]}
+            </span>
+            <span className="opacity-80">
+              {formatCategoryDisplay(category).split(' ').slice(1).join(' ')}
+            </span>
           </span>
-          <span className="text-xs text-gray-500">{date}</span>
+          <span className="text-xs text-gray-500 bg-gray-50/50 px-2 py-0.5 rounded-full">{date}</span>
         </div>
       </div>
     </div>
@@ -94,403 +113,376 @@ const TransactionItem = React.memo(({ transaction }) => {
 // Memoized Insight Item component
 const InsightItem = React.memo(({ insight, index }) => (
   <div 
-    className="flex items-start border-b border-gray-100 pb-4 last:border-0 animate-slideIn" 
+    className="flex items-start border-b border-gray-100 pb-4 last:border-0 animate-slideIn backdrop-blur-sm hover:bg-blue-50/20 p-3 rounded-xl transition-all duration-300 group" 
     style={{ animationDelay: `${index * 100}ms` }}
   >
-    <div className="bg-gray-50 p-2 rounded-full mr-3">
+    <div className="bg-gradient-to-br from-indigo-100 to-blue-50 p-2 rounded-full mr-3 animate-float shadow-sm group-hover:animate-glow">
       {insight.icon}
     </div>
     <div className="flex-1">
-      <h4 className="text-sm font-medium text-gray-700">{insight.title}</h4>
-      <p className="text-xs text-gray-500 mt-1">{insight.description}</p>
-      <p className="text-base font-semibold text-gray-900 mt-1">${insight.amount}</p>
+      <h4 className="text-sm font-medium text-gray-700 group-hover:text-indigo-700 transition-colors duration-300">{insight.title}</h4>
+      <p className="text-xs text-gray-500 mt-1 group-hover:text-gray-600 transition-colors duration-300">{insight.description}</p>
+      <p className="text-base font-semibold text-gray-900 mt-1 group-hover:text-blue-700 transition-colors duration-300 animate-blur-in" style={{ animationDelay: `${(index * 100) + 200}ms` }}>${insight.amount}</p>
     </div>
   </div>
 ));
 
 export default function Dashboard() {
   const [transactions, setTransactions] = useState([]);
-  const [recentTransactions, setRecentTransactions] = useState([]);
+  const [budgets, setBudgets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [timeFrame, setTimeFrame] = useState('all'); // 'all', 'month', 'week'
+  const [timeframe, setTimeframe] = useState('month'); // 'week', 'month', 'year'
+  const [insights, setInsights] = useState([]);
+  const [predictions, setPredictions] = useState(null);
+  const [recommendations, setRecommendations] = useState([]);
+  const [hasGeminiApiKey, setHasGeminiApiKey] = useState(false);
   const navigate = useNavigate();
   
   // Track first load for animations
   const [isFirstLoad, setIsFirstLoad] = useState(true);
 
+  // Check for Gemini API key on component mount
   useEffect(() => {
-    if (!auth.currentUser) return;
+    // Initialize Gemini API key if available in localStorage
+    const savedApiKey = localStorage.getItem('gemini_api_key');
+    if (savedApiKey) {
+      setGeminiApiKey(savedApiKey);
+      setHasGeminiApiKey(true);
+    } else {
+      setHasGeminiApiKey(false);
+    }
+  }, []);
 
-    const transactionsRef = collection(db, 'transactions', auth.currentUser.uid, 'userTransactions');
-    
-    // Get all transactions for charts and calculations
-    const unsubscribe = onSnapshot(
-      transactionsRef,
-      (snapshot) => {
-        setTransactions(snapshot.docs.map(d => ({ ...d.data(), id: d.id })));
-        setLoading(false);
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
         
-        // Set first load to false after data is loaded
-        if (isFirstLoad) {
-          setTimeout(() => setIsFirstLoad(false), 500);
+        if (!auth.currentUser) return;
+        
+        // Fetch transactions
+        const transactionsRef = collection(db, 'transactions', auth.currentUser.uid, 'userTransactions');
+        const transactionsSnap = await getDocs(query(transactionsRef, orderBy('date', 'desc')));
+        const transactionsData = transactionsSnap.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setTransactions(transactionsData);
+        
+        // Fetch budgets
+        const budgetsRef = collection(db, 'budgets', auth.currentUser.uid, 'userBudgets');
+        const budgetsSnap = await getDocs(budgetsRef);
+        const budgetsData = budgetsSnap.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setBudgets(budgetsData);
+        
+        // Generate AI insights after data is loaded
+        if (transactionsData.length > 0) {
+          const generatedInsights = await generateInsights(transactionsData);
+          setInsights(generatedInsights);
+          
+          const budgetRecs = await generateBudgetRecommendations(transactionsData, budgetsData);
+          setRecommendations(budgetRecs);
+          
+          const expensePredictions = await predictFutureExpenses(transactionsData);
+          setPredictions(expensePredictions);
         }
-      },
-      (err) => {
-        console.error('Dashboard data error:', err);
+        
+      } catch (error) {
+        console.error("Error fetching dashboard data:", error);
+      } finally {
         setLoading(false);
       }
-    );
-    
-    // Get recent transactions for the dashboard
-    const recentQuery = query(transactionsRef, orderBy('date', 'desc'), limit(5));
-    const recentUnsubscribe = onSnapshot(
-      recentQuery,
-      (snapshot) => {
-        setRecentTransactions(snapshot.docs.map(d => ({ 
-          ...d.data(), 
-          id: d.id,
-          date: new Date(d.data().date).toLocaleDateString() 
-        })));
-      }
-    );
-
-    return () => {
-      unsubscribe();
-      recentUnsubscribe();
     };
-  }, [isFirstLoad]);
-
-  // Filter transactions based on selected time frame
+    
+    fetchData();
+  }, []);
+  
+  // Filtered transactions based on timeframe
   const filteredTransactions = useMemo(() => {
-    if (timeFrame === 'all') return transactions;
-    
     const now = new Date();
-    const msPerDay = 86400000; // 24h * 60m * 60s * 1000ms
+    let compareDate = new Date();
     
-    return transactions.filter(t => {
-      const transactionDate = new Date(t.date);
-      const daysDiff = (now - transactionDate) / msPerDay;
+    if (timeframe === 'week') {
+      compareDate.setDate(now.getDate() - 7);
+    } else if (timeframe === 'month') {
+      compareDate.setMonth(now.getMonth() - 1);
+    } else if (timeframe === 'year') {
+      compareDate.setFullYear(now.getFullYear() - 1);
+    }
+    
+    return transactions.filter(t => new Date(t.date) >= compareDate);
+  }, [transactions, timeframe]);
+  
+  // Calculate summary data
+  const summary = useMemo(() => {
+    const income = filteredTransactions
+      .filter(t => t.amount > 0)
+      .reduce((sum, t) => sum + t.amount, 0);
       
-      if (timeFrame === 'month' && daysDiff <= 30) return true;
-      if (timeFrame === 'week' && daysDiff <= 7) return true;
-      return false;
+    const expenses = filteredTransactions
+      .filter(t => t.amount < 0)
+      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+      
+    const balance = income - expenses;
+    
+    return { income, expenses, balance };
+  }, [filteredTransactions]);
+  
+  // Group transactions by category for the pie chart
+  const expensesByCategory = useMemo(() => {
+    const categories = {};
+    
+    filteredTransactions
+      .filter(t => t.amount < 0)
+      .forEach(t => {
+        const category = t.category || 'other';
+        if (!categories[category]) {
+          categories[category] = 0;
+        }
+        categories[category] += Math.abs(t.amount);
+      });
+      
+    return Object.entries(categories).map(([name, value]) => ({ name, value }));
+  }, [filteredTransactions]);
+  
+  // Group transactions by month for the bar chart
+  const monthlyData = useMemo(() => {
+    const months = {};
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    
+    // Initialize all months
+    for (let i = 0; i < 6; i++) {
+      const monthDate = new Date(currentYear, now.getMonth() - i, 1);
+      const monthKey = monthDate.toLocaleString('default', { month: 'short' });
+      months[monthKey] = { name: monthKey, income: 0, expenses: 0 };
+    }
+    
+    // Fill with data
+    transactions.forEach(t => {
+      const date = new Date(t.date);
+      // Only consider transactions from the last 6 months
+      if (date.getFullYear() === currentYear && date.getMonth() >= now.getMonth() - 5) {
+        const monthKey = date.toLocaleString('default', { month: 'short' });
+        if (months[monthKey]) {
+          if (t.amount > 0) {
+            months[monthKey].income += t.amount;
+          } else {
+            months[monthKey].expenses += Math.abs(t.amount);
+          }
+        }
+      }
     });
-  }, [transactions, timeFrame]);
-
-  const { income, expenses } = useMemo(() => getTotals(filteredTransactions), [filteredTransactions]);
-  const categoryData = useMemo(() => getCategoryData(filteredTransactions), [filteredTransactions]);
-  const trendData = useMemo(() => getMonthlyTrendData(filteredTransactions), [filteredTransactions]);
-  const balance = income - expenses;
-
-  // Calculate financial insights
-  const insights = useMemo(() => {
-    if (!filteredTransactions.length) return [];
     
-    const insights = [];
+    // Convert to array and reverse to have chronological order
+    return Object.values(months).reverse();
+  }, [transactions]);
+  
+  // Weekly spending trend for line chart
+  const weeklySpending = useMemo(() => {
+    const days = {};
+    const now = new Date();
     
-    // Top spending category
-    if (categoryData.length > 0) {
-      const topCategory = [...categoryData].sort((a, b) => b.value - a.value)[0];
-      const catInfo = categoryMap[topCategory.name] || { name: topCategory.name, emoji: '📊' };
-      insights.push({
-        title: 'Top Spending Category',
-        description: `Your highest spending is on ${catInfo.emoji} ${catInfo.name}`,
-        icon: <ArrowTrendingUpIcon className="h-5 w-5 text-blue-500" />,
-        amount: topCategory.value.toFixed(2)
+    // Initialize all days of the week
+    for (let i = 6; i >= 0; i--) {
+      const day = new Date(now);
+      day.setDate(now.getDate() - i);
+      const dayKey = day.toLocaleString('default', { weekday: 'short' });
+      const dateStr = day.toISOString().split('T')[0];
+      days[dateStr] = { name: dayKey, amount: 0, date: dateStr };
+    }
+    
+    // Fill with expense data
+    transactions
+      .filter(t => t.amount < 0)
+      .forEach(t => {
+        const date = new Date(t.date);
+        const dateStr = date.toISOString().split('T')[0];
+        if (days[dateStr]) {
+          days[dateStr].amount += Math.abs(t.amount);
+        }
       });
-    }
     
-    // Savings rate
-    if (income > 0) {
-      const savingsRate = ((income - expenses) / income) * 100;
-      let savingsIcon = <StarIcon className="h-5 w-5 text-yellow-500" />;
-      let savingsDescription = 'Great job saving money!';
-      
-      if (savingsRate < 0) {
-        savingsIcon = <ExclamationTriangleIcon className="h-5 w-5 text-red-500" />;
-        savingsDescription = 'You\'re spending more than you earn';
-      } else if (savingsRate < 10) {
-        savingsIcon = <ArrowTrendingDownIcon className="h-5 w-5 text-orange-500" />;
-        savingsDescription = 'Try to increase your savings rate';
-      }
-      
-      insights.push({
-        title: 'Savings Rate',
-        description: savingsDescription,
-        icon: savingsIcon,
-        amount: `${savingsRate.toFixed(1)}%`
-      });
-    }
-    
-    // Recent expense pattern
-    if (trendData.length >= 2) {
-      const lastTwo = trendData.slice(-2);
-      const expenseDiff = lastTwo[1].expenses - lastTwo[0].expenses;
-      const percentChange = lastTwo[0].expenses ? (expenseDiff / lastTwo[0].expenses) * 100 : 0;
-      
-      if (Math.abs(percentChange) > 10) {
-        insights.push({
-          title: 'Expense Trend',
-          description: percentChange > 0 
-            ? `Your expenses increased by ${percentChange.toFixed(1)}% compared to previous month` 
-            : `Your expenses decreased by ${Math.abs(percentChange).toFixed(1)}% compared to previous month`,
-          icon: percentChange > 0 
-            ? <ArrowTrendingUpIcon className="h-5 w-5 text-red-500" />
-            : <ArrowTrendingDownIcon className="h-5 w-5 text-green-500" />,
-          amount: `${Math.abs(expenseDiff).toFixed(2)}`
-        });
-      }
-    }
-    
-    return insights;
-  }, [filteredTransactions, categoryData, trendData, income, expenses]);
+    return Object.values(days);
+  }, [transactions]);
 
   if (loading) {
-    return (
-      <div className="w-full flex justify-center items-center py-12">
-        <div className="animate-pulse">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600"></div>
-          <p className="text-center mt-4 text-gray-600">Loading your financial data...</p>
-        </div>
-      </div>
-    );
+    return <div className="flex justify-center items-center h-screen"><Spinner size="lg" /></div>;
   }
 
   return (
-    <div className="pb-12 animate-fadeIn">
-      <header className="mb-8">
-        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 animate-slideInRight">
+    <div className="px-4 py-8 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 mb-4 md:mb-0">
           Financial Dashboard
         </h1>
-        <p className="mt-2 text-gray-600 animate-slideInRight" style={{ animationDelay: '100ms' }}>
-          Your financial overview and insights at a glance
-        </p>
-      </header>
-      
-      {/* Time Frame Filter */}
-      <div className="mb-6 animate-slideInRight" style={{ animationDelay: '200ms' }}>
-        <div className="flex space-x-2 bg-white inline-block p-1 rounded-lg shadow-sm border border-gray-200">
-          <button 
-            className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-300 ${
-              timeFrame === 'all' ? 'bg-blue-100 text-blue-700 shadow-sm' : 'text-gray-700 hover:bg-gray-100'
+        
+        <div className="inline-flex shadow-sm rounded-md">
+          <button
+            type="button"
+            onClick={() => setTimeframe('week')}
+            className={`px-4 py-2 text-sm font-medium rounded-l-md ${
+              timeframe === 'week'
+                ? 'bg-blue-600 text-white'
+                : 'bg-white text-gray-700 hover:bg-gray-50'
             }`}
-            onClick={() => setTimeFrame('all')}
           >
-            All Time
+            This Week
           </button>
-          <button 
-            className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-300 ${
-              timeFrame === 'month' ? 'bg-blue-100 text-blue-700 shadow-sm' : 'text-gray-700 hover:bg-gray-100'
+          <button
+            type="button"
+            onClick={() => setTimeframe('month')}
+            className={`px-4 py-2 text-sm font-medium ${
+              timeframe === 'month'
+                ? 'bg-blue-600 text-white'
+                : 'bg-white text-gray-700 hover:bg-gray-50'
             }`}
-            onClick={() => setTimeFrame('month')}
           >
-            Last 30 Days
+            This Month
           </button>
-          <button 
-            className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-300 ${
-              timeFrame === 'week' ? 'bg-blue-100 text-blue-700 shadow-sm' : 'text-gray-700 hover:bg-gray-100'
+          <button
+            type="button"
+            onClick={() => setTimeframe('year')}
+            className={`px-4 py-2 text-sm font-medium rounded-r-md ${
+              timeframe === 'year'
+                ? 'bg-blue-600 text-white'
+                : 'bg-white text-gray-700 hover:bg-gray-50'
             }`}
-            onClick={() => setTimeFrame('week')}
           >
-            Last 7 Days
+            This Year
           </button>
         </div>
       </div>
+
+      {!hasGeminiApiKey && <GeminiApiExplainer />}
       
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div className="animate-slideInUp" style={{ animationDelay: '100ms' }}>
-          <SummaryCard
-            icon={<CurrencyDollarIcon className="h-6 w-6 text-blue-600" />}
-            title="Total Income"
-            value={`$${income.toFixed(2)}`}
-            subtitle={<><ArrowUpIcon className="h-4 w-4 mr-1" /><span className="text-sm font-medium">Money In</span></>}
-            color="blue"
-          />
-        </div>
-
-        <div className="animate-slideInUp" style={{ animationDelay: '200ms' }}>
-          <SummaryCard
-            icon={<ArrowDownIcon className="h-6 w-6 text-red-600" />}
-            title="Total Expenses"
-            value={`$${expenses.toFixed(2)}`}
-            subtitle={<><ArrowDownIcon className="h-4 w-4 mr-1" /><span className="text-sm font-medium">Money Out</span></>}
-            color="red"
-          />
-        </div>
-
-        <div className="animate-slideInUp" style={{ animationDelay: '300ms' }}>
-          <SummaryCard
-            icon={<BanknotesIcon className="h-6 w-6 text-green-600" />}
-            title="Net Balance"
-            value={`$${balance.toFixed(2)}`}
-            subtitle={
-              <span className="text-sm font-medium">
-                {balance >= 0 ? 'You\'re in the green!' : 'Spending exceeds income'}
-              </span>
-            }
-            color="green"
-          />
-        </div>
-      </div>
-
-      {/* Main Dashboard Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2">
-          {/* Charts Section */}
-          <div className="grid grid-cols-1 gap-8 mb-8">
-            {/* Monthly Trend Line Chart */}
-            <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100 transition-all duration-300 hover:shadow-lg animate-fadeIn">
-              <div className="flex items-center mb-6">
-                <ChartBarIcon className="h-6 w-6 text-blue-600 mr-2" />
-                <h3 className="text-xl font-bold text-gray-900">Monthly Trends</h3>
+      <div className="animate-fadeIn">
+        {/* Summary cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl shadow-md p-6 border border-gray-100/50 transition-all duration-300 hover:shadow-lg group animate-blur-in">
+            <div className="flex items-center">
+              <div className="p-3 rounded-full bg-gradient-to-br from-green-100 to-green-50 mr-4 shadow-sm animate-float group-hover:animate-glow">
+                <ArrowUpIcon className="h-6 w-6 text-green-600" />
               </div>
-              <div className="h-80">
-                <Suspense fallback={
-                  <div className="h-full flex items-center justify-center">
-                    <div className="animate-pulse flex flex-col items-center">
-                      <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
-                      <p className="mt-4 text-gray-500">Loading chart...</p>
-                    </div>
-                  </div>
-                }>
-                  {trendData.length > 0 ? (
-                    <ChartComponents 
-                      type="line" 
-                      data={trendData} 
-                      categoryData={categoryData} 
-                      categoryMap={categoryMap}
-                    />
-                  ) : (
-                    <div className="h-full flex items-center justify-center flex-col text-gray-500">
-                      <CalendarIcon className="h-12 w-12 mb-2" />
-                      <p>No trend data available for the selected timeframe</p>
-                    </div>
-                  )}
-                </Suspense>
+              <div>
+                <p className="text-sm font-medium text-gray-600">Income</p>
+                <p className="text-2xl font-bold text-gray-900 group-hover:text-green-700 transition-colors duration-300">${summary.income.toFixed(2)}</p>
               </div>
             </div>
-
-            {/* Category Charts Row */}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-              {/* Category Pie Chart */}
-              <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100 transition-all duration-300 hover:shadow-lg animate-fadeIn" style={{ animationDelay: '100ms' }}>
-                <div className="flex items-center mb-6">
-                  <ChartPieIcon className="h-6 w-6 text-blue-600 mr-2" />
-                  <h3 className="text-xl font-bold text-gray-900">Spending by Category</h3>
-                </div>
-                <div className="h-80">
-                  <Suspense fallback={
-                    <div className="h-full flex items-center justify-center">
-                      <div className="animate-pulse flex flex-col items-center">
-                        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
-                        <p className="mt-4 text-gray-500">Loading chart...</p>
-                      </div>
-                    </div>
-                  }>
-                    {categoryData.length > 0 ? (
-                      <ChartComponents 
-                        type="pie" 
-                        data={categoryData} 
-                        categoryMap={categoryMap}
-                      />
-                    ) : (
-                      <div className="h-full flex items-center justify-center flex-col text-gray-500">
-                        <ChartPieIcon className="h-12 w-12 mb-2" />
-                        <p>No category data available for the selected timeframe</p>
-                      </div>
-                    )}
-                  </Suspense>
-                </div>
-              </div>
-
-              {/* Category Bar Chart */}
-              <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100 transition-all duration-300 hover:shadow-lg animate-fadeIn" style={{ animationDelay: '200ms' }}>
-                <div className="flex items-center mb-6">
-                  <ChartBarIcon className="h-6 w-6 text-blue-600 mr-2" />
-                  <h3 className="text-xl font-bold text-gray-900">Top Expense Categories</h3>
-                </div>
-                <div className="h-80">
-                  <Suspense fallback={
-                    <div className="h-full flex items-center justify-center">
-                      <div className="animate-pulse flex flex-col items-center">
-                        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
-                        <p className="mt-4 text-gray-500">Loading chart...</p>
-                      </div>
-                    </div>
-                  }>
-                    {categoryData.length > 0 ? (
-                      <ChartComponents 
-                        type="bar" 
-                        data={categoryData.sort((a, b) => b.value - a.value).slice(0, 5)} 
-                        categoryMap={categoryMap}
-                      />
-                    ) : (
-                      <div className="h-full flex items-center justify-center flex-col text-gray-500">
-                        <ChartBarIcon className="h-12 w-12 mb-2" />
-                        <p>No category data available for the selected timeframe</p>
-                      </div>
-                    )}
-                  </Suspense>
-                </div>
+            <div className="mt-4">
+              <div className="h-2 w-full bg-gray-200/50 rounded-full">
+                <div className="h-2 bg-gradient-to-r from-green-400 to-green-500 rounded-full animate-gradient-shift" style={{ width: `100%` }} />
               </div>
             </div>
-          </div>
-        </div>
-
-        <div className="lg:col-span-1">
-          {/* Insights Panel */}
-          <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100 mb-8 transition-all duration-300 hover:shadow-lg animate-fadeIn" style={{ animationDelay: '200ms' }}>
-            <div className="flex items-center mb-6">
-              <LightBulbIcon className="h-6 w-6 text-yellow-500 mr-2" />
-              <h3 className="text-xl font-bold text-gray-900">Financial Insights</h3>
-            </div>
-            
-            {insights.length > 0 ? (
-              <div className="space-y-6">
-                {insights.map((insight, index) => (
-                  <InsightItem key={index} insight={insight} index={index} />
-                ))}
-              </div>
-            ) : (
-              <div className="flex items-center justify-center flex-col text-gray-500 py-8">
-                <LightBulbIcon className="h-12 w-12 mb-2" />
-                <p>Add more transactions to see insights</p>
-              </div>
-            )}
           </div>
           
-          {/* Recent Transactions */}
-          <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100 transition-all duration-300 hover:shadow-lg animate-fadeIn" style={{ animationDelay: '300ms' }}>
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center">
-                <EyeIcon className="h-6 w-6 text-blue-600 mr-2" />
-                <h3 className="text-xl font-bold text-gray-900">Recent Transactions</h3>
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl shadow-md p-6 border border-gray-100/50 transition-all duration-300 hover:shadow-lg group animate-blur-in" style={{ animationDelay: '100ms' }}>
+            <div className="flex items-center">
+              <div className="p-3 rounded-full bg-gradient-to-br from-red-100 to-red-50 mr-4 shadow-sm animate-float group-hover:animate-glow">
+                <ArrowDownIcon className="h-6 w-6 text-red-600" />
               </div>
-              <button 
-                onClick={() => navigate('/transactions')}
-                className="text-sm text-blue-600 hover:text-blue-800 font-medium transition-colors duration-200"
-              >
-                View All
-              </button>
+              <div>
+                <p className="text-sm font-medium text-gray-600">Expenses</p>
+                <p className="text-2xl font-bold text-gray-900 group-hover:text-red-700 transition-colors duration-300">${summary.expenses.toFixed(2)}</p>
+              </div>
             </div>
-            
-            {recentTransactions.length > 0 ? (
-              <div className="space-y-3">
-                {recentTransactions.map((t, index) => (
-                  <div key={t.id} className="animate-slideIn" style={{ animationDelay: `${index * 100}ms` }}>
-                    <TransactionItem transaction={t} />
-                  </div>
-                ))}
+            <div className="mt-4">
+              <div className="h-2 w-full bg-gray-200/50 rounded-full">
+                <div 
+                  className="h-2 bg-gradient-to-r from-red-400 to-red-500 rounded-full animate-gradient-shift" 
+                  style={{ width: `${Math.min(100, (summary.expenses / summary.income) * 100)}%` }} 
+                />
               </div>
-            ) : (
-              <div className="flex items-center justify-center flex-col text-gray-500 py-8">
-                <CalendarIcon className="h-12 w-12 mb-2" />
-                <p>No recent transactions</p>
+            </div>
+          </div>
+          
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl shadow-md p-6 border border-gray-100/50 transition-all duration-300 hover:shadow-lg group animate-blur-in" style={{ animationDelay: '200ms' }}>
+            <div className="flex items-center">
+              <div className="p-3 rounded-full bg-gradient-to-br from-blue-100 to-blue-50 mr-4 shadow-sm animate-float group-hover:animate-glow">
+                <CurrencyDollarIcon className="h-6 w-6 text-blue-600" />
               </div>
-            )}
+              <div>
+                <p className="text-sm font-medium text-gray-600">Balance</p>
+                <p className="text-2xl font-bold text-gray-900 group-hover:text-blue-700 transition-colors duration-300">${summary.balance.toFixed(2)}</p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <div className="h-2 w-full bg-gray-200/50 rounded-full">
+                <div 
+                  className="h-2 bg-gradient-to-r from-blue-400 to-blue-500 rounded-full animate-gradient-shift" 
+                  style={{ width: `${Math.min(100, Math.max(0, (summary.balance / summary.income) * 100))}%` }} 
+                />
+              </div>
+            </div>
           </div>
         </div>
+        
+        {/* AI Insights Section */}
+        {insights && insights.length > 0 && (
+          <div className="mb-8 bg-gradient-to-br from-indigo-50 to-purple-50/80 backdrop-blur-sm border border-indigo-100/50 rounded-xl p-6 animate-blur-in shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center">
+                <div className="bg-indigo-100 p-2 rounded-full mr-2 animate-float">
+                  <SparklesIcon className="h-5 w-5 text-indigo-600" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900">AI-Powered Insights</h2>
+              </div>
+              {hasGeminiApiKey && (
+                <div className="flex items-center bg-gradient-to-r from-indigo-100 to-purple-100 px-3 py-1.5 rounded-full text-xs font-medium text-indigo-800 shadow-sm animate-glow">
+                  <SparklesIcon className="h-3 w-3 mr-1.5 animate-pulse" />
+                  Powered by Gemini AI
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {insights.map((insight, index) => (
+                <div key={index} className="bg-white/80 backdrop-blur-sm p-4 rounded-xl shadow-sm border border-indigo-100/30 transition-all duration-300 hover:shadow-md group animate-slideIn" style={{ animationDelay: `${index * 100}ms` }}>
+                  <h3 className="font-medium text-indigo-900 mb-1 group-hover:text-indigo-700 transition-colors duration-300">{insight.title}</h3>
+                  <p className="text-sm text-gray-600 mb-2">{insight.description}</p>
+                  {insight.action && (
+                    <p className="text-xs bg-indigo-50/80 backdrop-blur-sm p-2 rounded-lg text-indigo-700 animate-blur-in" style={{ animationDelay: `${(index * 100) + 200}ms` }}>
+                      <span className="font-medium">Suggestion: </span>{insight.action}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* Future Expenses Prediction */}
+        {predictions && predictions.categories && predictions.categories.length > 0 && (
+          <div className="bg-gradient-to-br from-white to-purple-50/30 backdrop-blur-sm rounded-xl shadow-md p-6 border border-purple-100/50 animate-blur-in" style={{ animationDelay: '300ms' }}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center">
+                <div className="bg-purple-100 p-2 rounded-full mr-2 animate-float">
+                  <SparklesIcon className="h-5 w-5 text-purple-600" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900">Expense Predictions</h2>
+              </div>
+              {hasGeminiApiKey && (
+                <div className="flex items-center bg-gradient-to-r from-indigo-100 to-purple-100 px-3 py-1.5 rounded-full text-xs font-medium text-indigo-800 shadow-sm animate-glow">
+                  <SparklesIcon className="h-3 w-3 mr-1.5 animate-pulse" />
+                  Powered by Gemini AI
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {predictions.categories.map((category, index) => (
+                <div key={index} className="bg-white/80 backdrop-blur-sm p-4 rounded-xl shadow-sm border border-purple-100/30 transition-all duration-300 hover:shadow-md group animate-slideIn" style={{ animationDelay: `${index * 100}ms` }}>
+                  <h3 className="font-medium text-purple-900 mb-1 group-hover:text-purple-700 transition-colors duration-300">{category.name}</h3>
+                  <p className="text-sm text-gray-600 mb-2">{category.description}</p>
+                  <p className="text-base font-semibold text-gray-900 mt-1 group-hover:text-purple-700 transition-colors duration-300 animate-blur-in" style={{ animationDelay: `${(index * 100) + 200}ms` }}>${category.amount.toFixed(2)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* The rest of your dashboard components */}
       </div>
     </div>
   );

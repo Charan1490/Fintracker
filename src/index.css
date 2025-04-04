@@ -69,6 +69,50 @@
   }
 }
 
+@keyframes glow {
+  0% {
+    box-shadow: 0 0 5px rgba(79, 70, 229, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(79, 70, 229, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 5px rgba(79, 70, 229, 0.2);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes blurIn {
+  0% {
+    opacity: 0;
+    filter: blur(10px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
 /* Animation utilities */
 @layer utilities {
   .animate-fadeIn {
@@ -93,6 +137,25 @@
   
   .animate-float {
     animation: float 4s ease-in-out infinite;
+  }
+
+  .animate-glow {
+    animation: glow 2s ease-in-out infinite;
+  }
+  
+  .animate-shimmer {
+    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.5) 50%, rgba(255,255,255,0) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 2s infinite;
+  }
+  
+  .animate-blur-in {
+    animation: blurIn 0.7s ease-out forwards;
+  }
+  
+  .animate-gradient-shift {
+    background-size: 200% 200%;
+    animation: gradientShift 4s ease infinite;
   }
 }
 
